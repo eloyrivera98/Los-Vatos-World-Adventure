@@ -23,6 +23,8 @@ const emptyData:LiveData={profile:null,group:null,members:[],pins:[],activities:
 const DataContext=createContext<LiveData>(emptyData)
 const useLiveData=()=>useContext(DataContext)
 const pinColors=['#ff5c45','#f5b73b','#17a27d','#6c63ff']
+const scanLinkRequested=()=>window.location.pathname.replace(/\/+$/,'')==='/scan'||new URLSearchParams(window.location.search).get('open')==='scan'
+const rememberScanLink=()=>{if(scanLinkRequested())sessionStorage.setItem('lvwa-after-auth','scan')}
 async function readApiResponse(response:Response){
   const text=await response.text()
   let data:any
@@ -36,10 +38,10 @@ function Logo({ compact=false, onMarkTap }: { compact?:boolean; onMarkTap?:()=>v
   return <div className="logo"><span className={'logo-mark '+(onMarkTap?'logo-secret-trigger':'')} onPointerUp={onMarkTap}><MapPin size={compact?17:20} strokeWidth={2.7}/><i/></span>{!compact && <span>Los Vatos World Adventure</span>}</div>
 }
 
-function PublicCover({onSecretTap}:{onSecretTap:()=>void}){
+function PublicCover({onSecretTap,scanIntent=false}:{onSecretTap:()=>void;scanIntent?:boolean}){
   return <main className="public-cover">
     <header className="cover-header"><Logo onMarkTap={onSecretTap}/><span>Una aventura privada entre amigos</span></header>
-    <section className="cover-hero">
+    {scanIntent&&<div className="cover-scan-notice"><ScanLine/><div><b>Has escaneado un acceso a los cromos</b><span>Identifícate desde el acceso privado y te llevaremos directamente a elegir entre activar o encontrar un cromo.</span></div></div>}<section className="cover-hero">
       <div className="cover-copy"><span className="eyebrow">VIAJA · ENCUENTRA · COLECCIONA</span><h1>Cada ciudad esconde una <em>historia compartida.</em></h1><p>Los Vatos World Adventure es un álbum de viaje privado. Dejamos cromos físicos por el mundo: conoces la ciudad, desbloqueas una fotografía al llegar y utilizas esa pista para encontrar la pegatina.</p><div className="cover-purpose"><ShieldCheck/><div><b>La ubicación exacta siempre permanece secreta</b><span>Solo al escanear físicamente el cromo se revelan su historia, su mensaje y el recuerdo completo, que pasa a tu colección.</span></div></div></div>
       <div className="cover-visual" aria-hidden="true"><div className="cover-card cover-card-one"><span>LOS VATOS · #001</span><strong>Atardecer en Lisboa</strong><small>Cromo coleccionado</small></div><div className="cover-card cover-card-two"><span>LOS VATOS · #002</span><Camera/><strong>Foto-pista desbloqueada</strong><small>Granada · ubicación secreta</small></div><div className="cover-route"><MapPin/><i/><Sparkles/></div></div>
     </section>
@@ -49,16 +51,17 @@ function PublicCover({onSecretTap}:{onSecretTap:()=>void}){
 }
 
 function LoginScreen({onHide}:{onHide:()=>void}){
-  const path=window.location.pathname.split('/').filter(Boolean).pop() || 'sign-in'
+  const requested=window.location.pathname.split('/').filter(Boolean).pop()||'sign-in';const path=['sign-in','sign-up','forgot-password','reset-password'].includes(requested)?requested:'sign-in'
   return <main className="auth-screen"><section className="auth-brand"><Logo/><div><span className="eyebrow">VIAJA · ENCUENTRA · COLECCIONA</span><h1>El mundo está lleno de historias.<br/><em>Sal a encontrarlas.</em></h1><p>Una aventura privada entre amigos, un cromo en cada lugar.</p></div><div className="auth-orbit"><MapPin/><Sparkles/><Globe2/></div></section><section className="auth-form-panel"><button className="hide-access" onClick={onHide} aria-label="Volver a la portada"><X/></button><div className="auth-mobile-logo"><Logo/></div><div className="auth-card"><span className="eyebrow">BIENVENIDO, VATO</span><AuthView pathname={path}/></div><small>Al continuar aceptas formar parte de esta aventura privada.</small></section></main>
 }
 
 function AccessGate(){
+  const scanIntent=scanLinkRequested();rememberScanLink()
   const [revealed,setRevealed]=useState(()=>sessionStorage.getItem('lvwa-access')==='open')
   const taps=useRef<number[]>([])
   const secretTap=()=>{const now=Date.now();taps.current=[...taps.current.filter(time=>now-time<4000),now];if(taps.current.length>=5){sessionStorage.setItem('lvwa-access','open');setRevealed(true);taps.current=[]}}
   const hide=()=>{sessionStorage.removeItem('lvwa-access');setRevealed(false)}
-  return revealed?<LoginScreen onHide={hide}/>:<PublicCover onSecretTap={secretTap}/>
+  return revealed?<LoginScreen onHide={hide}/>:<PublicCover onSecretTap={secretTap} scanIntent={scanIntent}/>
 }
 
 function App() {
@@ -72,6 +75,15 @@ function App() {
   const [liveData,setLiveData]=useState<LiveData>(emptyData)
   const [dataPending,setDataPending]=useState(false)
   const [dataError,setDataError]=useState('')
+  useEffect(()=>{
+    const direct=scanLinkRequested()
+    if(!session?.user){if(direct)rememberScanLink();return}
+    if(direct||sessionStorage.getItem('lvwa-after-auth')==='scan'){
+      sessionStorage.removeItem('lvwa-after-auth')
+      setSelected(null);setPage('map');setScanOpen(true)
+      if(direct)window.history.replaceState({},'',window.location.pathname.startsWith('/scan')?'/':'?')
+    }
+  },[session?.user?.id])
   useEffect(()=>{
     if(!session?.user){setLiveData(emptyData);return}
     let cancelled=false
