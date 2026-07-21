@@ -55,3 +55,11 @@ Las URLs de Neon y los secretos de autenticación son exclusivamente de servidor
 
 La versión incluida usa datos locales intencionadamente para que la experiencia pueda revisarse sin cuentas externas. Autenticación real, persistencia, subida de imágenes, geocodificación, teselas, rate limiting y notificaciones push requieren configurar los servicios anteriores. El esquema inicial y las políticas de acceso están en `neon/schema.sql`.
 
+
+## Imágenes en Cloudflare R2
+
+Las nuevas fotos se suben desde el servidor mediante la API S3 compatible de R2. Las credenciales solo deben existir en Render y nunca deben usar el prefijo `VITE_`.
+
+Variables requeridas: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` y `R2_PUBLIC_URL`. Esta última debe ser la URL pública sin barra final del dominio conectado al bucket.
+
+`GET /api/health` devuelve `r2Configured: true` cuando las cinco variables están presentes. Las imágenes Base64 antiguas siguen siendo compatibles; al cambiar una foto de perfil se migrará esa imagen a R2.
