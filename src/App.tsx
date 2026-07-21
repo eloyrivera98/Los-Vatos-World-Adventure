@@ -18,8 +18,8 @@ type Member={id:string;display_name:string;username?:string;avatar_url?:string;r
 type Profile={id:string;display_name:string;username?:string;avatar_url?:string;created_at:string;onboarding_completed:boolean}
 type ActivityRow={id:string;activity_type:string;created_at:string;actor:string;avatar_url?:string;city?:string}
 type NotificationRow={id:string;type:string;title:string;body:string;created_at:string;read_at?:string;sticker_id?:string}
-type LiveData={profile:Profile|null;group:{id:string;name:string;role:string}|null;members:Member[];pins:Pin[];activities:ActivityRow[];notifications:NotificationRow[];stats:{activated:number;discovered:number;hidden:number;discoveries:number}}
-const emptyData:LiveData={profile:null,group:null,members:[],pins:[],activities:[],notifications:[],stats:{activated:0,discovered:0,hidden:0,discoveries:0}}
+type LiveData={profile:Profile|null;group:{id:string;name:string;role:string}|null;members:Member[];pins:Pin[];activities:ActivityRow[];notifications:NotificationRow[];unreadActivity:number;stats:{activated:number;discovered:number;hidden:number;discoveries:number}}
+const emptyData:LiveData={profile:null,group:null,members:[],pins:[],activities:[],notifications:[],unreadActivity:0,stats:{activated:0,discovered:0,hidden:0,discoveries:0}}
 const DataContext=createContext<LiveData>(emptyData)
 const useLiveData=()=>useContext(DataContext)
 const pinColors=['#ff5c45','#f5b73b','#17a27d','#6c63ff']
@@ -91,7 +91,7 @@ function App() {
     neonAuth.getJWTToken().then(token=>fetch('/api/bootstrap',{headers:{Authorization:`Bearer ${token}`}})).then(readApiResponse).then(raw=>{
       if(cancelled)return
       const realPins:Pin[]=raw.stickers.map((item:any,index:number)=>({id:item.id,number:Number(item.sticker_number),city:item.city||'Lugar sin nombre',country:item.country||'',lng:Number(item.lng),lat:Number(item.lat),count:Number(item.discovery_count),author:item.author,authorAvatar:item.author_avatar,date:formatDate(item.activated_at),title:item.title||undefined,story:item.story||undefined,message:item.message||undefined,photo:item.photo_url||undefined,color:pinColors[index%pinColors.length],owned:item.owned,collected:item.collected,hintUnlocked:Boolean(item.hint_unlocked),cityCount:Number(item.city_count||1),discoveries:item.discoveries||[]}))
-      setLiveData({profile:raw.profile,group:raw.group,members:raw.members,pins:realPins,activities:raw.activities,notifications:raw.notifications||[],stats:raw.stats});getPreciseLocation().then(async position=>{const token=await neonAuth.getJWTToken();const response=await fetch('/api/hints/city',{method:'POST',headers:{'content-type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy})});const result=await readApiResponse(response);if(!cancelled&&result.hints?.length)setCityHints(result.hints)}).catch(()=>{})
+      setLiveData({profile:raw.profile,group:raw.group,members:raw.members,pins:realPins,activities:raw.activities,notifications:raw.notifications||[],unreadActivity:Number(raw.unreadActivity||0),stats:raw.stats});getPreciseLocation().then(async position=>{const token=await neonAuth.getJWTToken();const response=await fetch('/api/hints/city',{method:'POST',headers:{'content-type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy})});const result=await readApiResponse(response);if(!cancelled&&result.hints?.length)setCityHints(result.hints)}).catch(()=>{})
     }).catch(error=>!cancelled&&setDataError(error.message)).finally(()=>!cancelled&&setDataPending(false))
     return()=>{cancelled=true}
   },[session?.user?.id])
@@ -102,15 +102,17 @@ function App() {
   if(dataPending) return <div className="auth-loading"><span/><p>Cargando tu aventura real…</p></div>
   if(dataError) return <DataUnavailable message={dataError}/>
 
-  const navigate = (p:Page) => { setPage(p); setSelected(null); if(p==='scan') setScanOpen(true) }
+  const markSeen=async(endpoint:string)=>{try{const token=await neonAuth.getJWTToken();await readApiResponse(await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${token}`}}))}catch(error){console.error(error)}}
+  const navigate = (p:Page) => {setPage(p);setSelected(null);if(p==='scan')setScanOpen(true);if(p==='activity'&&liveData.unreadActivity){setLiveData(current=>({...current,unreadActivity:0}));void markSeen('/api/activity/read')}}
+  const closeNotifications=()=>{setNotice(false);if(liveData.notifications.some(item=>!item.read_at)){setLiveData(current=>({...current,notifications:current.notifications.map(item=>({...item,read_at:item.read_at||new Date().toISOString()}))}));void markSeen('/api/notifications/read')}}
   return <DataContext.Provider value={liveData}><div className="app-shell">
     <aside className="sidebar">
       <Logo />
       <nav>
         <NavItem icon={<MapIcon/>} label="Mapa" active={page==='map'} onClick={()=>navigate('map')}/>
-        <NavItem icon={<Activity/>} label="Actividad" active={page==='activity'} onClick={()=>navigate('activity')} badge={liveData.activities.length?String(liveData.activities.length):undefined}/>
+        <NavItem icon={<Activity/>} label="Actividad" active={page==='activity'} onClick={()=>navigate('activity')} badge={liveData.unreadActivity?String(liveData.unreadActivity):undefined}/>
         <button className="scan-nav" onClick={()=>setScanOpen(true)}><span><ScanLine/></span>Escanear</button>
-        <NavItem icon={<Sparkles/>} label="Mi colección" active={page==='collection'} onClick={()=>navigate('collection')} badge={String(collected.length)}/>
+        <NavItem icon={<Sparkles/>} label="Mi colección" active={page==='collection'} onClick={()=>navigate('collection')}/>
         <NavItem icon={<BarChart3/>} label="Estadísticas" active={page==='stats'} onClick={()=>navigate('stats')}/>
         <NavItem icon={<UserRound/>} label="Mi perfil" active={page==='profile'} onClick={()=>navigate('profile')}/>
       </nav>
@@ -121,7 +123,7 @@ function App() {
     </aside>
 
     <main className="main">
-      {page==='map' && <MapPage selected={selected} setSelected={setSelected} zoom={zoom} setZoom={setZoom} onNotice={()=>setNotice(!notice)}/>} 
+      {page==='map' && <MapPage selected={selected} setSelected={setSelected} zoom={zoom} setZoom={setZoom} onNotice={()=>setNotice(true)}/>} 
       {page==='activity' && <ActivityPage/>}
       {page==='collection' && <CollectionPage collected={collected}/>} 
       {page==='stats' && <StatsPage/>}
@@ -137,7 +139,7 @@ function App() {
     </nav>
     {selected && <StickerPanel pin={selected} owned={collected.includes(selected.id)} onClose={()=>setSelected(null)}/>} 
     {scanOpen && <ScanFlow onCollect={()=>{}} onClose={()=>{setScanOpen(false); if(page==='scan') setPage('map')}}/>}
-    {notice && <NotificationPanel notifications={liveData.notifications} onClose={()=>setNotice(false)}/>} {cityHints.length>0&&<CityHintModal hints={cityHints} onClose={()=>{setCityHints([]);window.location.reload()}}/>} 
+    {notice && <NotificationPanel notifications={liveData.notifications.filter(item=>!item.read_at)} onClose={closeNotifications}/>} {cityHints.length>0&&<CityHintModal hints={cityHints} onClose={()=>{setCityHints([]);window.location.reload()}}/>} 
     {dataError&&<div className="data-error">{dataError}</div>}
   </div></DataContext.Provider>
 }
@@ -151,7 +153,7 @@ function MobileItem({icon,label,active,onClick}:{icon:React.ReactNode,label:stri
 }
 
 function MapPage({selected,setSelected,onNotice}:{selected:Pin|null,setSelected:(p:Pin)=>void,zoom:number,setZoom:(n:number)=>void,onNotice:()=>void}) {
-  const {pins,members,stats}=useLiveData()
+  const {pins,members,stats,notifications}=useLiveData()
   const [query,setQuery] = useState('')
   const [participantsOpen,setParticipantsOpen] = useState(false)
   const mapNode = useRef<HTMLDivElement>(null)
@@ -209,7 +211,7 @@ function MapPage({selected,setSelected,onNotice}:{selected:Pin|null,setSelected:
     <header className="map-header">
       <div className="mobile-logo"><Logo compact/></div>
       <form className="search" onSubmit={searchPlace}><Search/><input aria-label="Buscar" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Busca Lisboa, Bilbao, Barcelona…"/><kbd>↵</kbd></form>
-      <div className="header-actions"><button className="icon-btn" onClick={onNotice}><Bell/><i/></button><button className="member-stack" onClick={()=>setParticipantsOpen(true)} aria-label={`Ver los ${members.length} participantes`}>{members.slice(0,3).map(member=><Avatar src={member.avatar_url} name={member.display_name} key={member.id}/>)}{members.length>3&&<span>+{members.length-3}</span>}</button></div>
+      <div className="header-actions"><button className="icon-btn" onClick={onNotice}><Bell/>{notifications.some(item=>!item.read_at)&&<i/>}</button><button className="member-stack" onClick={()=>setParticipantsOpen(true)} aria-label={`Ver los ${members.length} participantes`}>{members.slice(0,3).map(member=><Avatar src={member.avatar_url} name={member.display_name} key={member.id}/>)}{members.length>3&&<span>+{members.length-3}</span>}</button></div>
     </header>
     {participantsOpen&&<ParticipantsModal members={members} onClose={()=>setParticipantsOpen(false)}/>} 
     <div className="map-canvas">
