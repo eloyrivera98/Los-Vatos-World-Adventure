@@ -1,0 +1,32 @@
+{
+  "name": "los-vatos-world-adventure",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env server.mjs --dev",
+    "build": "tsc -b && vite build",
+    "db:migrate": "node --env-file=.env scripts/migrate.mjs",
+    "preview": "node --env-file=.env server.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/neon-js": "^0.6.2-beta",
+    "@types/pg": "^8.20.0",
+    "@vitejs/plugin-react": "latest",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jose": "^6.2.3",
+    "lucide-react": "latest",
+    "maplibre-gl": "^5.24.0",
+    "pg": "^8.22.0",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/react": "latest",
+    "@types/react-dom": "latest"
+  }
+}

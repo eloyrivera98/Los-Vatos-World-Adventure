@@ -1,0 +1,1 @@
+const base=process.env.VITE_NEON_AUTH_URL.replace(/\/$/,'');for(const path of ['/.well-known/jwks.json','/jwks','/get-session']){const r=await fetch(base+path);console.log(path,r.status,r.headers.get('content-type'))}

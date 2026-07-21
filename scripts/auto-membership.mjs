@@ -1,0 +1,1 @@
+import pg from 'pg';import fs from 'node:fs';const c=new pg.Client({connectionString:process.env.DATABASE_URL_UNPOOLED});try{await c.connect();await c.query(fs.readFileSync('neon/auto-membership.sql','utf8'));console.log(JSON.stringify({auto_membership:true}))}finally{await c.end()}

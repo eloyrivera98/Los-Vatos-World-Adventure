@@ -1,0 +1,236 @@
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import maplibregl from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { AuthView } from '@neondatabase/neon-js/auth/react/ui'
+import { authClient, neonAuth } from './auth'
+import { activityLabel, formatDate, formatDateTime, mapLanguage } from './i18n'
+import {
+  Activity, ArrowLeft, BarChart3, Bell, Camera, Check, ChevronRight, CircleHelp,
+  Clock3, Compass, Crosshair, EyeOff, Flag, Globe2, Home, LocateFixed, LockKeyhole,
+  Map as MapIcon, MapPin, Menu, Navigation, Plus, Route, ScanLine, Search, Settings, LogOut,
+  ShieldCheck, Sparkles, Trophy, UserRound, Users, X, Zap
+} from 'lucide-react'
+
+type Page = 'map' | 'activity' | 'scan' | 'collection' | 'stats' | 'profile'
+type Discovery={id:string;name:string;avatar?:string;at:string}
+type Pin={id:string;city:string;country:string;lng:number;lat:number;count:number;author:string;authorAvatar?:string;date:string;story?:string;message?:string;photo?:string;color:string;owned:boolean;collected:boolean;discoveries:Discovery[]}
+type Member={id:string;display_name:string;username?:string;avatar_url?:string;role:string}
+type Profile={id:string;display_name:string;username?:string;avatar_url?:string;created_at:string;onboarding_completed:boolean}
+type ActivityRow={id:string;activity_type:string;created_at:string;actor:string;avatar_url?:string;city?:string}
+type LiveData={profile:Profile|null;group:{id:string;name:string;role:string}|null;members:Member[];pins:Pin[];activities:ActivityRow[];stats:{activated:number;discovered:number;hidden:number;discoveries:number}}
+const emptyData:LiveData={profile:null,group:null,members:[],pins:[],activities:[],stats:{activated:0,discovered:0,hidden:0,discoveries:0}}
+const DataContext=createContext<LiveData>(emptyData)
+const useLiveData=()=>useContext(DataContext)
+const pinColors=['#ff5c45','#f5b73b','#17a27d','#6c63ff']
+function Avatar({src,name,className='' }:{src?:string;name:string;className?:string}){return src?<img className={className} src={src} alt={name}/>:<span className={'avatar-fallback '+className}>{name.trim().charAt(0).toUpperCase()||'V'}</span>}
+function Logo({ compact=false, onMarkTap }: { compact?:boolean; onMarkTap?:()=>void }) {
+  return <div className="logo"><span className={'logo-mark '+(onMarkTap?'logo-secret-trigger':'')} onPointerUp={onMarkTap}><MapPin size={compact?17:20} strokeWidth={2.7}/><i/></span>{!compact && <span>Los Vatos World Adventure</span>}</div>
+}
+
+function PublicCover({onSecretTap}:{onSecretTap:()=>void}){
+  return <main className="public-cover">
+    <header className="cover-header"><Logo onMarkTap={onSecretTap}/><span>Una aventura privada entre amigos</span></header>
+    <section className="cover-hero">
+      <div className="cover-copy"><span className="eyebrow">VIAJA · ENCUENTRA · COLECCIONA</span><h1>Los lugares se convierten en <em>historias compartidas.</em></h1><p>Los Vatos World Adventure es un álbum de viaje privado. Recorremos el mundo dejando cromos físicos con fotos, mensajes y recuerdos que solo se desbloquean al encontrarlos.</p><div className="cover-purpose"><ShieldCheck/><div><b>Un espacio solo para nuestro círculo</b><span>Las ubicaciones y los recuerdos pertenecen a una comunidad privada de personas conocidas.</span></div></div></div>
+      <div className="cover-visual" aria-hidden="true"><div className="cover-card cover-card-one"><span>WANDERPIN · #001</span><strong>Lisboa</strong><small>Recuerdo descubierto</small></div><div className="cover-card cover-card-two"><span>WANDERPIN · #002</span><LockKeyhole/><strong>Próxima aventura</strong></div><div className="cover-route"><MapPin/><i/><Sparkles/></div></div>
+    </section>
+    <section className="cover-steps"><article><span>01</span><MapPin/><h2>Activa</h2><p>Deja un cromo en un lugar especial junto a una foto y un mensaje.</p></article><article><span>02</span><ScanLine/><h2>Encuentra</h2><p>Escanea el QR cuando estés cerca y descubre la historia que guarda.</p></article><article><span>03</span><Sparkles/><h2>Colecciona</h2><p>Conserva cada recuerdo encontrado en tu álbum personal de viaje.</p></article></section>
+    <footer><Logo compact/><span>Los Vatos World Adventure · Aventura privada</span></footer>
+  </main>
+}
+
+function LoginScreen({onHide}:{onHide:()=>void}){
+  const path=window.location.pathname.split('/').filter(Boolean).pop() || 'sign-in'
+  return <main className="auth-screen"><section className="auth-brand"><Logo/><div><span className="eyebrow">VIAJA · ENCUENTRA · COLECCIONA</span><h1>El mundo está lleno de historias.<br/><em>Sal a encontrarlas.</em></h1><p>Una aventura privada entre amigos, un cromo en cada lugar.</p></div><div className="auth-orbit"><MapPin/><Sparkles/><Globe2/></div></section><section className="auth-form-panel"><button className="hide-access" onClick={onHide} aria-label="Volver a la portada"><X/></button><div className="auth-mobile-logo"><Logo/></div><div className="auth-card"><span className="eyebrow">BIENVENIDO, VATO</span><AuthView pathname={path}/></div><small>Al continuar aceptas formar parte de esta aventura privada.</small></section></main>
+}
+
+function AccessGate(){
+  const [revealed,setRevealed]=useState(()=>sessionStorage.getItem('lvwa-access')==='open')
+  const taps=useRef<number[]>([])
+  const secretTap=()=>{const now=Date.now();taps.current=[...taps.current.filter(time=>now-time<4000),now];if(taps.current.length>=5){sessionStorage.setItem('lvwa-access','open');setRevealed(true);taps.current=[]}}
+  const hide=()=>{sessionStorage.removeItem('lvwa-access');setRevealed(false)}
+  return revealed?<LoginScreen onHide={hide}/>:<PublicCover onSecretTap={secretTap}/>
+}
+
+function App() {
+  const {data:session,isPending}=authClient.useSession()
+  const [page, setPage] = useState<Page>('map')
+  const [selected, setSelected] = useState<Pin | null>(null)
+  const [scanOpen, setScanOpen] = useState(false)
+  const [notice, setNotice] = useState(false)
+  const [zoom, setZoom] = useState(1)
+  const [liveData,setLiveData]=useState<LiveData>(emptyData)
+  const [dataPending,setDataPending]=useState(false)
+  const [dataError,setDataError]=useState('')
+  useEffect(()=>{
+    if(!session?.user){setLiveData(emptyData);return}
+    let cancelled=false
+    setDataPending(true);setDataError('')
+    neonAuth.getJWTToken().then(token=>fetch('/api/bootstrap',{headers:{Authorization:`Bearer ${token}`}})).then(async response=>{if(!response.ok)throw new Error((await response.json()).error||'Error al cargar Neon');return response.json()}).then(raw=>{
+      if(cancelled)return
+      const realPins:Pin[]=raw.stickers.map((item:any,index:number)=>({id:item.id,city:item.city||'Lugar sin nombre',country:item.country||'',lng:Number(item.lng),lat:Number(item.lat),count:Number(item.discovery_count),author:item.author,authorAvatar:item.author_avatar,date:formatDate(item.activated_at),story:item.story||undefined,message:item.message||undefined,photo:item.photo_url||undefined,color:pinColors[index%pinColors.length],owned:item.owned,collected:item.collected,discoveries:item.discoveries||[]}))
+      setLiveData({profile:raw.profile,group:raw.group,members:raw.members,pins:realPins,activities:raw.activities,stats:raw.stats})
+    }).catch(error=>!cancelled&&setDataError(error.message)).finally(()=>!cancelled&&setDataPending(false))
+    return()=>{cancelled=true}
+  },[session?.user?.id])
+  const collected=liveData.pins.filter(pin=>pin.collected||pin.owned).map(pin=>pin.id)
+
+  if(isPending) return <div className="auth-loading"><span/><Logo/></div>
+  if(!session?.user) return <AccessGate/>
+  if(dataPending) return <div className="auth-loading"><span/><p>Cargando tu aventura real…</p></div>
+
+  const navigate = (p:Page) => { setPage(p); setSelected(null); if(p==='scan') setScanOpen(true) }
+  return <DataContext.Provider value={liveData}><div className="app-shell">
+    <aside className="sidebar">
+      <Logo />
+      <nav>
+        <NavItem icon={<MapIcon/>} label="Mapa" active={page==='map'} onClick={()=>navigate('map')}/>
+        <NavItem icon={<Activity/>} label="Actividad" active={page==='activity'} onClick={()=>navigate('activity')} badge={liveData.activities.length?String(liveData.activities.length):undefined}/>
+        <button className="scan-nav" onClick={()=>setScanOpen(true)}><span><ScanLine/></span>Escanear</button>
+        <NavItem icon={<Sparkles/>} label="Mi colección" active={page==='collection'} onClick={()=>navigate('collection')} badge={String(collected.length)}/>
+        <NavItem icon={<BarChart3/>} label="Estadísticas" active={page==='stats'} onClick={()=>navigate('stats')}/>
+        <NavItem icon={<UserRound/>} label="Mi perfil" active={page==='profile'} onClick={()=>navigate('profile')}/>
+      </nav>
+      <div className="side-bottom">
+        <div className="mini-user"><Avatar src={liveData.profile?.avatar_url||session.user.image||undefined} name={liveData.profile?.display_name||session.user.name}/><div><b>{liveData.profile?.display_name||session.user.name}</b><small>{liveData.profile?.username?`@${liveData.profile.username}`:session.user.email}</small></div></div>
+        <button className="logout-button" onClick={()=>authClient.signOut()}><LogOut/> Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <main className="main">
+      {page==='map' && <MapPage selected={selected} setSelected={setSelected} zoom={zoom} setZoom={setZoom} onNotice={()=>setNotice(!notice)}/>} 
+      {page==='activity' && <ActivityPage/>}
+      {page==='collection' && <CollectionPage collected={collected}/>} 
+      {page==='stats' && <StatsPage/>}
+      {page==='profile' && <ProfilePage/>}
+    </main>
+
+    <nav className="mobile-nav">
+      <MobileItem icon={<MapIcon/>} label="Mapa" active={page==='map'} onClick={()=>navigate('map')}/>
+      <MobileItem icon={<Activity/>} label="Actividad" active={page==='activity'} onClick={()=>navigate('activity')}/>
+      <button className="mobile-scan" aria-label="Escanear" onClick={()=>setScanOpen(true)}><ScanLine/></button>
+      <MobileItem icon={<Sparkles/>} label="Cromos" active={page==='collection'} onClick={()=>navigate('collection')}/>
+      <MobileItem icon={<UserRound/>} label="Perfil" active={page==='profile'} onClick={()=>navigate('profile')}/>
+    </nav>
+    {selected && <StickerPanel pin={selected} owned={collected.includes(selected.id)} onClose={()=>setSelected(null)}/>} 
+    {scanOpen && <ScanFlow onCollect={()=>{}} onClose={()=>{setScanOpen(false); if(page==='scan') setPage('map')}}/>}
+    {notice && <NotificationPanel onClose={()=>setNotice(false)}/>} 
+    {dataError&&<div className="data-error">{dataError}</div>}
+  </div></DataContext.Provider>
+}
+
+function NavItem({icon,label,active,onClick,badge}:{icon:React.ReactNode,label:string,active:boolean,onClick:()=>void,badge?:string}) {
+  return <button className={'nav-item '+(active?'active':'')} onClick={onClick}>{icon}<span>{label}</span>{badge&&<em>{badge}</em>}</button>
+}
+function MobileItem({icon,label,active,onClick}:{icon:React.ReactNode,label:string,active:boolean,onClick:()=>void}) {
+  return <button className={active?'active':''} onClick={onClick}>{icon}<small>{label}</small></button>
+}
+
+function MapPage({selected,setSelected,onNotice}:{selected:Pin|null,setSelected:(p:Pin)=>void,zoom:number,setZoom:(n:number)=>void,onNotice:()=>void}) {
+  const {pins,members,stats}=useLiveData()
+  const [query,setQuery] = useState('')
+  const [participantsOpen,setParticipantsOpen] = useState(false)
+  const mapNode = useRef<HTMLDivElement>(null)
+  const map = useRef<maplibregl.Map | null>(null)
+  const markers = useRef<maplibregl.Marker[]>([])
+  const visiblePins = useMemo(()=>pins.filter(p=>(p.city+' '+p.country).toLowerCase().includes(query.toLowerCase())),[query])
+
+  useEffect(()=>{
+    if(!mapNode.current || map.current) return
+    const instance = new maplibregl.Map({
+      container: mapNode.current, center:[-3.7,40.25], zoom:5.1, minZoom:2, maxZoom:19,
+      attributionControl:false,
+      style:'https://tiles.openfreemap.org/styles/positron'
+    })
+    instance.on('style.load',()=>{
+      // Prioriza la traducción española disponible en OpenStreetMap y conserva
+      // el nombre internacional o local cuando todavía no existe name:es.
+      for(const layer of instance.getStyle().layers ?? []){
+        const textField=layer.type==='symbol'?layer.layout?.['text-field']:undefined
+        if(textField && JSON.stringify(textField).includes('name')){
+          instance.setLayoutProperty(layer.id,'text-field',['coalesce',['get','name:'+mapLanguage],['get','name:latin'],['get','name']])
+        }
+      }
+    })
+    instance.addControl(new maplibregl.NavigationControl({visualizePitch:true}),'top-right')
+    instance.addControl(new maplibregl.GeolocateControl({positionOptions:{enableHighAccuracy:true},trackUserLocation:true}),'top-right')
+    instance.addControl(new maplibregl.AttributionControl({compact:true}),'bottom-right')
+    map.current=instance
+    return()=>{instance.remove();map.current=null}
+  },[])
+
+  useEffect(()=>{
+    if(!map.current) return
+    markers.current.forEach(marker=>marker.remove())
+    markers.current=visiblePins.map(pin=>{
+      const el=document.createElement('button')
+      el.className='real-pin'+(selected?.id===pin.id?' selected':'')
+      el.style.setProperty('--pin-color',pin.color)
+      el.setAttribute('aria-label',`Abrir pegatina en ${pin.city}`)
+      el.innerHTML=`<span><svg viewBox="0 0 24 24"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg></span>${pin.count>4?`<b>${pin.count}</b>`:''}`
+      el.onclick=()=>{setSelected(pin);map.current?.flyTo({center:[pin.lng,pin.lat],zoom:13,offset:[-150,0],duration:900})}
+      return new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat([pin.lng,pin.lat]).addTo(map.current!)
+    })
+  },[visiblePins,selected?.id,setSelected])
+
+  const searchPlace=(e:React.FormEvent)=>{
+    e.preventDefault()
+    const value=query.trim().toLowerCase()
+    const match=pins.find(p=>(p.city+' '+p.country).toLowerCase().includes(value))
+    if(match){map.current?.flyTo({center:[match.lng,match.lat],zoom:13,duration:1200});setSelected(match)}
+    else if(!value) map.current?.flyTo({center:[-3.7,40.25],zoom:5.1,duration:900})
+  }
+  return <section className="map-page">
+    <header className="map-header">
+      <div className="mobile-logo"><Logo compact/></div>
+      <form className="search" onSubmit={searchPlace}><Search/><input aria-label="Buscar" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Busca Lisboa, Bilbao, Barcelona…"/><kbd>↵</kbd></form>
+      <div className="header-actions"><button className="icon-btn" onClick={onNotice}><Bell/><i/></button><button className="member-stack" onClick={()=>setParticipantsOpen(true)} aria-label={`Ver los ${members.length} participantes`}>{members.slice(0,3).map(member=><Avatar src={member.avatar_url} name={member.display_name} key={member.id}/>)}{members.length>3&&<span>+{members.length-3}</span>}</button></div>
+    </header>
+    {participantsOpen&&<ParticipantsModal members={members} onClose={()=>setParticipantsOpen(false)}/>} 
+    <div className="map-canvas">
+      <div ref={mapNode} className="real-map" aria-label="Mapa interactivo de pegatinas"/>
+      <div className="map-copy"><p>El mapa de vuestra historia</p><h1>{stats.activated} {stats.activated===1?'lugar':'lugares'}.<br/><span>{stats.activated?'Recuerdos reales.':'La aventura empieza aquí.'}</span></h1><div><span className="live-dot"/> {stats.discovered} descubiertas <i/> {stats.hidden} esperando</div></div>
+      <button className="layers" onClick={()=>map.current?.fitBounds([[-10.2,36],[3.4,44]],{padding:70,duration:1000})}><Globe2/>Ver todos</button>
+      <div className="privacy-toast"><span><LockKeyhole/></span><div><b>{stats.hidden} cromos siguen ocultos</b><small>Solo sus creadores conocen el lugar.</small></div></div>
+    </div>
+  </section>
+}
+function ParticipantsModal({members,onClose}:{members:Member[];onClose:()=>void}){
+  useEffect(()=>{const close=(event:KeyboardEvent)=>event.key==='Escape'&&onClose();window.addEventListener('keydown',close);return()=>window.removeEventListener('keydown',close)},[onClose])
+  const admins=members.filter(member=>member.role==='admin')
+  const participants=members.filter(member=>member.role!=='admin')
+  return <div className="participants-backdrop" onMouseDown={event=>event.target===event.currentTarget&&onClose()}><section className="participants-panel" role="dialog" aria-modal="true" aria-labelledby="participants-title"><header><div><span className="eyebrow">VUESTRA AVENTURA</span><h2 id="participants-title">Participantes</h2><p>{members.length} {members.length===1?'persona forma':'personas forman'} parte del grupo</p></div><button className="close" onClick={onClose} aria-label="Cerrar"><X/></button></header><div className="participants-list">{[...admins,...participants].map(member=><article key={member.id}><Avatar src={member.avatar_url} name={member.display_name}/><div><b>{member.display_name}</b><small>{member.username?`@${member.username}`:'Sin alias'}</small></div><span className={member.role==='admin'?'admin':''}>{member.role==='admin'?'Administrador':'Participante'}</span></article>)}</div></section></div>
+}
+function CollectibleCard({pin,locked=false,reveal=false}:{pin:Pin;locked?:boolean;reveal?:boolean}) {
+  return <article className={'collectible-card '+(locked?'is-locked ':'')+(reveal?'card-reveal':'')} style={{'--card-color':pin.color} as React.CSSProperties}>
+    <div className="foil"/><div className="card-number">LOS VATOS · #{String(pin.id).padStart(3,'0')}</div>
+    <div className="card-photo">{!locked?(pin.photo?<img src={pin.photo} alt={`Recuerdo de ${pin.city}`}/>:<div className="photo-empty"><Camera/><span>Sin fotografía</span></div>):<div className="locked-art"><LockKeyhole/><span>Sin descubrir</span></div>}<span className="card-place">{pin.city}</span></div>
+    <div className="card-info"><div><span>{pin.country}</span><h3>{locked?'Cromo secreto':pin.city}</h3></div><Sparkles/>{!locked&&<p>“{pin.message}”</p>}</div>
+  </article>
+}
+
+function StickerPanel({pin,owned,onClose}:{pin:Pin;owned:boolean;onClose:()=>void}) {
+  return <div className="detail-panel card-panel"><button className="close" onClick={onClose}><X/></button><div className="panel-card-wrap"><CollectibleCard pin={pin} locked={!owned}/></div><div className="panel-body"><span className="eyebrow">CROMO</span><h2>{pin.city}</h2><p className="location"><MapPin/> {pin.city}{pin.country?`, ${pin.country}`:''}</p>{!owned?<div className="public-card-info"><div className="privacy-note"><LockKeyhole/><div><b>Contenido privado</b><small>Foto, mensaje e historia se revelan al descubrirlo.</small></div></div><div className="author"><Avatar src={pin.authorAvatar} name={pin.author}/><div><small>Activado por</small><b>{pin.author}</b><span>{pin.date}</span></div></div><div className="discover-head"><b>Lo han encontrado</b><span>{pin.count} personas</span></div><DiscoveryList discoveries={pin.discoveries}/></div>:<><p className="story">“{pin.story||'Sin historia'}”</p>{pin.message&&<div className="creator-message"><Avatar src={pin.authorAvatar} name={pin.author}/><div><small>Un mensaje de {pin.author}</small><p>{pin.message}</p></div></div>}<div className="author"><Avatar src={pin.authorAvatar} name={pin.author}/><div><small>Activado por</small><b>{pin.author} · {pin.date}</b></div></div><div className="discover-head"><b>Coleccionistas</b><span>{pin.count}</span></div><DiscoveryList discoveries={pin.discoveries}/></>}</div></div>
+}
+function DiscoveryList({discoveries}:{discoveries:Discovery[]}){return <div className="people">{discoveries.length?discoveries.map((item,i)=><div key={item.id}><Avatar src={item.avatar} name={item.name}/><span><b>{item.name}</b><small>{formatDate(item.at)}</small></span>{i===0&&<Trophy/>}</div>):<div className="empty-inline">Todavía no lo ha encontrado nadie.</div>}</div>}
+function getPreciseLocation(){return new Promise<GeolocationPosition>((resolve,reject)=>{if(!navigator.geolocation)return reject(new Error('Tu dispositivo no permite geolocalización.'));let best:GeolocationPosition|undefined;let settled=false;const finish=(position?:GeolocationPosition,error?:GeolocationPositionError)=>{if(settled)return;settled=true;navigator.geolocation.clearWatch(watchId);clearTimeout(timer);if(position)resolve(position);else if(error?.code===1)reject(new Error('El permiso de ubicación está desactivado. Permítelo en los ajustes del navegador y activa la ubicación precisa.'));else reject(new Error('No hemos podido obtener tu ubicación. Activa el GPS y vuelve a intentarlo al aire libre.'))};const watchId=navigator.geolocation.watchPosition(position=>{if(!best||position.coords.accuracy<best.coords.accuracy)best=position;if(position.coords.accuracy<=50)finish(position)},error=>{if(error.code===1)finish(undefined,error)},{enableHighAccuracy:true,timeout:18000,maximumAge:0});const timer=window.setTimeout(()=>finish(best),12000)})}
+function ScanFlow({onClose}:{onClose:()=>void;onCollect:(id:string)=>void}) {
+  const [mode,setMode]=useState<'choose'|'activate'|'working'|'success'|'error'>('choose');const [title,setTitle]=useState('');const [story,setStory]=useState('');const [message,setMessage]=useState('');const [photo,setPhoto]=useState('');const [error,setError]=useState('');const [result,setResult]=useState<any>(null)
+  const call=async(endpoint:string,payload:Record<string,unknown>)=>{setMode('working');setError('');try{const position=await getPreciseLocation();const token=await neonAuth.getJWTToken();const response=await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({...payload,latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy})});const data=await response.json();if(!response.ok)throw new Error(data.error);setResult(data);setMode('success')}catch(reason){setError(reason instanceof Error?reason.message:'Ha ocurrido un error');setMode('error')}}
+  return <div className="modal-backdrop"><div className="scan-modal"><button className="close" onClick={onClose}><X/></button>{mode==='choose'&&<><div className="scan-symbol"><ScanLine/></div><span className="eyebrow">ESCANEAR QR</span><h2>¿Qué quieres registrar?</h2><p>Validaremos tu posición real antes de guardar cualquier cambio.</p><div className="choice-grid"><button onClick={()=>setMode('activate')}><span className="choice-icon coral"><Plus/></span><b>He colocado<br/>un cromo</b><small>Crea un punto secreto</small><ChevronRight/></button><button onClick={()=>call('/api/stickers/discover',{})}><span className="choice-icon green"><Crosshair/></span><b>He encontrado<br/>un cromo</b><small>Añádelo a tu colección</small><ChevronRight/></button></div><div className="privacy-line"><ShieldCheck/> La proximidad se calcula de forma segura en Neon.</div></>}{mode==='activate'&&<><div className="scan-symbol coral-bg"><Camera/></div><span className="eyebrow">NUEVO CROMO</span><h2>Deja una sorpresa</h2><label className="photo-upload"><input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={async e=>{const file=e.target.files?.[0];if(file)setPhoto(await prepareAvatar(file))}}/><Camera/><b>{photo?'Foto preparada':'Hacer selfie o elegir foto'}</b><small>Se optimizará antes de guardarse</small></label><label className="field">Título<input value={title} maxLength={100} onChange={e=>setTitle(e.target.value)} placeholder="Ej. Donde empezó todo"/></label><label className="field">Mensaje<textarea value={message} maxLength={1000} onChange={e=>setMessage(e.target.value)} placeholder="Mensaje para quien lo encuentre"/></label><label className="field">Historia opcional<textarea value={story} maxLength={3000} onChange={e=>setStory(e.target.value)}/></label><button className="primary full" onClick={()=>call('/api/stickers/activate',{title,story,message,photo})}><MapPin/> Obtener ubicación y activar</button><button className="text-btn" onClick={()=>setMode('choose')}>Volver</button></>}{mode==='working'&&<div className="locating"><div className="radar"><i/><i/><span><Crosshair/></span></div><h2>Comprobando tu ubicación…</h2><p>Espera junto al cromo físico.</p></div>}{mode==='error'&&<div className="scan-error"><div className="scan-symbol coral-bg"><X/></div><h2>No se ha podido completar</h2><p>{error}</p><button className="primary full" onClick={()=>setMode('choose')}>Volver a intentarlo</button></div>}{mode==='success'&&<div className="success-state"><div className="success-check"><Check/></div><h2>{result?.card?'¡Cromo descubierto!':'¡Cromo activado!'}</h2><p>{result?.card?`Ya forma parte de tu colección${result.distance!=null?` · a ${result.distance} m`:''}.`:'Se ha guardado en Neon y su ubicación permanece oculta.'}</p>{result?.card&&<div className="success-card"><Sparkles/><div><b>{result.card.title||result.card.city||'Nuevo cromo'}</b><small>{result.card.message||'Contenido desbloqueado'}</small></div></div>}<button className="primary full" onClick={()=>window.location.reload()}>Ver en la aplicación</button></div>}</div></div>
+}
+function CollectionPage({collected}:{collected:string[]}){
+  const {pins}=useLiveData();const [openCard,setOpenCard]=useState<Pin|null>(null);const owned=openCard?collected.includes(openCard.id):false;const percent=pins.length?Math.round(collected.length/pins.length*100):0
+  return <section className="content-page collection-page"><PageHeader eyebrow="TU ÁLBUM DE VIAJE" title={`${collected.length} de ${pins.length} cromos`} desc="Solo aparecen cromos registrados realmente en vuestro grupo."/>{!pins.length?<EmptyState icon={<Sparkles/>} title="Tu colección está vacía" text="Cuando descubras vuestro primer cromo aparecerá aquí."/>:<><div className="collection-progress"><span style={{width:`${percent}%`}}/><b>{percent}% completado</b></div><div className="card-grid">{pins.map(pin=><div className="album-slot" key={pin.id}><button className="album-card-button" onClick={()=>setOpenCard(pin)}><CollectibleCard pin={pin} locked={!collected.includes(pin.id)}/></button><small>{collected.includes(pin.id)?`Descubierto · ${pin.city}`:'Encuéntralo en el mapa'}</small></div>)}</div></>}{openCard&&<div className="card-modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&setOpenCard(null)}><div className="card-modal"><button className="close" onClick={()=>setOpenCard(null)}><X/></button><div className="card-modal-visual"><CollectibleCard pin={openCard} locked={!owned}/></div><div className="card-modal-info"><span className="eyebrow">CROMO</span><h2>{owned?openCard.city:'Cromo secreto'}</h2><p className="location"><MapPin/> {openCard.city}, {openCard.country}</p>{owned?<><div className="modal-author"><Avatar src={openCard.authorAvatar} name={openCard.author}/><div><small>Creado por</small><b>{openCard.author}</b><span>{openCard.date}</span></div></div><div className="info-section"><small>LA HISTORIA</small><p>{openCard.story||'Sin historia'}</p></div>{openCard.message&&<div className="info-section message-section"><small>MENSAJE PARA TI</small><p>“{openCard.message}”</p></div>}<DiscoveryList discoveries={openCard.discoveries}/></>:<div className="locked-modal-copy"><LockKeyhole/><h3>El lugar es público. El recuerdo no.</h3><p>Descubre físicamente este cromo para revelar su contenido.</p></div>}</div></div></div>}</section>
+}
+function PageHeader({eyebrow,title,desc}:{eyebrow:string,title:string,desc:string}){return <header className="page-title"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{desc}</p></header>}
+
+function EmptyState({icon,title,text}:{icon:React.ReactNode;title:string;text:string}){return <div className="empty-state"><span>{icon}</span><h3>{title}</h3><p>{text}</p></div>}
+function ActivityPage(){const {activities}=useLiveData();return <section className="content-page"><PageHeader eyebrow="VUESTRO DIARIO" title="Actividad del grupo" desc="Solo eventos guardados en vuestra base de datos."/>{!activities.length?<EmptyState icon={<Activity/>} title="Todavía no hay actividad" text="La primera activación o descubrimiento aparecerá aquí."/>:<div className="feed">{activities.map(item=><article className="feed-item" key={item.id}><div className="feed-icon green"><Activity/></div><div className="feed-content"><time>{formatDateTime(item.created_at)}</time><h3><b>{item.actor}</b> · {activityLabel(item.activity_type)}</h3>{item.city&&<p>{item.city}</p>}</div></article>)}</div>}</section>}
+function StatsPage(){const {stats,members}=useLiveData();return <section className="content-page"><PageHeader eyebrow="DATOS REALES" title={`${stats.activated} lugares, ${stats.discoveries} hallazgos`} desc="Estadísticas calculadas directamente desde Neon."/><div className="stat-grid"><Stat icon={<MapPin/>} value={String(stats.activated)} label="cromos activados"/><Stat icon={<Sparkles/>} value={String(stats.discovered)} label="cromos descubiertos"/><Stat icon={<Route/>} value={String(stats.discoveries)} label="descubrimientos"/><Stat icon={<Users/>} value={String(members.length)} label="miembros reales"/></div>{!stats.activated&&<EmptyState icon={<BarChart3/>} title="Aún no hay estadísticas" text="Los datos aparecerán cuando el grupo empiece a activar cromos."/>}</section>}
+function Stat({icon,value,label}:{icon:React.ReactNode;value:string;label:string}){return <div className="stat"><span>{icon}</span><b>{value}</b><p>{label}</p></div>}
+async function prepareAvatar(file:File){return new Promise<string>((resolve,reject)=>{if(!file.type.startsWith('image/'))return reject(new Error('Selecciona una imagen válida'));const image=new Image();const url=URL.createObjectURL(file);image.onload=()=>{const size=512;const scale=Math.min(1,size/Math.max(image.width,image.height));const canvas=document.createElement('canvas');canvas.width=Math.round(image.width*scale);canvas.height=Math.round(image.height*scale);canvas.getContext('2d')?.drawImage(image,0,0,canvas.width,canvas.height);URL.revokeObjectURL(url);resolve(canvas.toDataURL('image/webp',.82))};image.onerror=()=>reject(new Error('No se pudo leer la imagen'));image.src=url})}
+function ProfilePage(){const {profile,pins}=useLiveData();const [editing,setEditing]=useState(false);if(!profile)return <section className="content-page"><EmptyState icon={<UserRound/>} title="Preparando tu perfil" text="Actualiza la página en unos segundos."/></section>;const placed=pins.filter(p=>p.owned).length;const found=pins.filter(p=>p.collected).length;const first=pins.filter(p=>p.discoveries[0]?.id===profile.id).length;const countries=new Set(pins.filter(p=>p.collected||p.owned).map(p=>p.country).filter(Boolean)).size;return <section className="content-page profile-page"><div className="profile-hero"><div className="profile-avatar"><Avatar src={profile.avatar_url} name={profile.display_name}/><span><Camera/></span></div><div><span className="eyebrow">MIEMBRO DESDE {new Date(profile.created_at).getFullYear()}</span><h1>{profile.display_name}</h1><p>{profile.username?`@${profile.username}`:'Sin alias todavía'}</p></div><button className="outline" onClick={()=>setEditing(true)}>Editar perfil</button></div><div className="profile-stats"><div><b>{placed}</b><span>Colocados</span></div><div><b>{found}</b><span>Encontrados</span></div><div><b>{first}</b><span>Primeros hallazgos</span></div><div><b>{countries}</b><span>Países</span></div></div>{!placed&&!found&&<EmptyState icon={<Compass/>} title="Tu aventura empieza ahora" text="Todavía no has colocado ni encontrado ningún cromo."/>}{editing&&<EditProfileModal profile={profile} onClose={()=>setEditing(false)}/>}</section>}
+function EditProfileModal({profile,onClose}:{profile:Profile;onClose:()=>void}){const [name,setName]=useState(profile.display_name);const [username,setUsername]=useState(profile.username||'');const [avatar,setAvatar]=useState(profile.avatar_url||'');const [error,setError]=useState('');const [saving,setSaving]=useState(false);const submit=async(e:React.FormEvent)=>{e.preventDefault();setSaving(true);setError('');try{const token=await neonAuth.getJWTToken();const response=await fetch('/api/profile',{method:'PATCH',headers:{'content-type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({displayName:name,username,avatarUrl:avatar||null})});const result=await response.json();if(!response.ok)throw new Error(result.error);window.location.reload()}catch(reason){setError(reason instanceof Error?reason.message:'No se pudo guardar')}finally{setSaving(false)}};return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><form className="edit-profile-modal" onSubmit={submit}><button type="button" className="close" onClick={onClose}><X/></button><span className="eyebrow">TU IDENTIDAD</span><h2>Editar perfil</h2><label className="edit-avatar"><Avatar src={avatar} name={name}/><span><Camera/> Cambiar fotografía<input type="file" accept="image/jpeg,image/png,image/webp" onChange={async e=>{const file=e.target.files?.[0];if(!file)return;try{setAvatar(await prepareAvatar(file))}catch(reason){setError(reason instanceof Error?reason.message:'Imagen inválida')}}}/></span></label><label className="field">Nombre visible<input value={name} maxLength={80} onChange={e=>setName(e.target.value)} required/></label><label className="field">Alias<input value={username} maxLength={30} placeholder="tu_alias" onChange={e=>setUsername(e.target.value.toLowerCase())}/></label>{error&&<p className="form-error">{error}</p>}<button className="primary full" disabled={saving}>{saving?'Guardando…':'Guardar cambios'}<Check/></button></form></div>}
+function NotificationPanel({onClose}:{onClose:()=>void}){return <div className="notifications"><div className="notif-head"><h3>Notificaciones</h3><button onClick={onClose}><X/></button></div><EmptyState icon={<Bell/>} title="Sin notificaciones" text="Aquí aparecerán únicamente avisos reales del grupo."/></div>}
+export default App

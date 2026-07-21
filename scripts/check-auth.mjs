@@ -1,0 +1,1 @@
+const base=process.env.VITE_NEON_AUTH_URL?.replace(/\/$/,'');if(!base)throw new Error('missing auth url');const response=await fetch(base+'/get-session',{headers:{origin:'http://localhost:5173'}});console.log(JSON.stringify({reachable:response.status<500,status:response.status,content_type:response.headers.get('content-type')},null,2));if(response.status>=500)process.exitCode=1
