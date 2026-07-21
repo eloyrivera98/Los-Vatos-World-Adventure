@@ -43,7 +43,7 @@ try {
   `, [group.id, friendId])).rows[0]
   await client.query(`
     insert into public.sticker_content(sticker_id, title, story, message, photo_url, photo_kind)
-    values ($1, 'Atardecer en Lisboa', 'Una parada junto al Tajo que terminó convirtiéndose en uno de esos recuerdos que siempre vuelven.', 'Si has llegado hasta aquí, mira hacia el río y haz una foto para recordar el momento.', 'https://images.unsplash.com/photo-1555881400-74d7acaacd8b?auto=format&fit=crop&w=1200&q=85', 'place')
+    values ($1, 'Atardecer en Lisboa', 'Una parada junto al Tajo que terminó convirtiéndose en uno de esos recuerdos que siempre vuelven.', 'Si has llegado hasta aquí, mira hacia el río y haz una foto para recordar el momento.', '/demo/lisboa-tajo.jpg', 'place')
   `, [lisboa.id])
   await client.query(`
     insert into public.discoveries(sticker_id, discovered_by, position, location_accuracy, distance_from_sticker, discovered_at)
@@ -57,7 +57,7 @@ try {
   `, [group.id, demoId])).rows[0]
   await client.query(`
     insert into public.sticker_content(sticker_id, title, story, message, photo_url, photo_kind)
-    values ($1, 'Recuerdo de Granada', 'Una tarde recorriendo el Albaicín con la Alhambra al fondo y la ciudad encendida bajo nosotros.', '¡Bienvenido, vato! Este cromo ya forma parte de tu aventura.', 'https://images.unsplash.com/photo-1600100397608-f010f86b3381?auto=format&fit=crop&w=1200&q=85', 'place')
+    values ($1, 'Recuerdo de Granada', 'Una tarde recorriendo el Albaicín con la Alhambra al fondo y la ciudad encendida bajo nosotros.', '¡Bienvenido, vato! Este cromo ya forma parte de tu aventura.', '/demo/granada-alhambra.png', 'place')
   `, [granada.id])
   await client.query(`
     insert into public.discoveries(sticker_id, discovered_by, position, location_accuracy, distance_from_sticker, discovered_at)
@@ -72,6 +72,12 @@ try {
       ($1, $4, $5, 'ACTIVATED', '{"city":"Granada"}', now() - interval '3 days'),
       ($1, $2, $5, 'FIRST_DISCOVERY', '{"city":"Granada"}', now() - interval '2 days')
   `, [group.id, friendId, lisboa.id, demoId, granada.id])
+
+  await client.query('delete from public.discoveries where sticker_id=$1', [granada.id])
+  await client.query("update public.stickers set activated_by=$1,status='HIDDEN',first_discovered_at=null,updated_at=now() where id=$2", [friendId, granada.id])
+  await client.query('delete from public.activities where sticker_id=$1', [granada.id])
+  await client.query("insert into public.activities(group_id,actor_id,sticker_id,activity_type,metadata,created_at) values($1,$2,$3,'ACTIVATED','{\"city\":\"Granada\"}',now()-interval '3 days')", [group.id, friendId, granada.id])
+  await client.query("insert into public.sticker_hint_unlocks(sticker_id,user_id,city) values($1,$2,'Granada') on conflict do nothing", [granada.id, demoId])
 
   await client.query('commit')
   console.log(JSON.stringify({ seeded: true, stickers: 2 }))
