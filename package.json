@@ -7,7 +7,8 @@
     "dev": "node --env-file=.env server.mjs --dev",
     "build": "tsc -b && vite build",
     "db:migrate": "node --env-file=.env scripts/migrate.mjs",
-    "preview": "node --env-file=.env server.mjs"
+    "preview": "node --env-file=.env server.mjs",
+    "start": "node server.mjs"
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.6.2-beta",

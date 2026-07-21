@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: los-vatos-world-adventure
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      - key: VITE_NEON_AUTH_URL
+        sync: false

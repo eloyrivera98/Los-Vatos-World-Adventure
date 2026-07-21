@@ -8,5 +8,5 @@ import { authClient } from './auth'
 import { authLocalization } from './i18n'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><NeonAuthUIProvider authClient={authClient} social={{providers:["google"]}} localization={authLocalization}><App /></NeonAuthUIProvider></React.StrictMode>,
+  <React.StrictMode><NeonAuthUIProvider authClient={authClient} social={{providers:["google"]}} localization={authLocalization} defaultTheme="light"><App /></NeonAuthUIProvider></React.StrictMode>,
 )
